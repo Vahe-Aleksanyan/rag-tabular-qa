@@ -8,6 +8,8 @@ from app.rag.sql_agent import SQLAgent
 from app.rag.sql_builder import build_sql
 from app.rag.answer_synth import AnswerSynth
 from app.utils.formatting import rows_to_markdown_table
+from app.rag.freeform_sql import FreeformSQLGenerator
+
 
 st.set_page_config(page_title="Tabular QA", layout="wide")
 st.title("Tabular QA — Chat over Excel→MySQL")
@@ -27,6 +29,8 @@ sql_agent = SQLAgent(engine)
 llm = OpenAIClient()
 router = Router(llm)
 synth = AnswerSynth(llm)
+freeform = FreeformSQLGenerator(llm)
+
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -44,6 +48,9 @@ for m in st.session_state.messages:
                 st.code(m["sql"], language="sql")
             if m.get("show_rows") and m.get("rows"):
                 st.json(m["rows"])
+            if m.get("mode"):
+                st.caption(f"Mode: {m['mode']}")
+
 
 
 question = st.chat_input("Ask about clients, invoices, line items...")
@@ -56,11 +63,35 @@ if question:
     # 1) Plan
     plan = router.plan(question)
 
-    # 2) Build deterministic SQL + params
-    built = build_sql(plan)
+     # 2) Deterministic SQL first, then fallback to freeform SQL
+    used_mode = "deterministic"
+    sql_text = None
+    sql_params = {}
 
-    # 3) Execute safely (parameterized)
-    run = sql_agent.run_sql(built.sql, built.params)
+    try:
+        if plan.intent == "FREEFORM_SQL":
+            raise ValueError("Router chose FREEFORM_SQL")
+        built = build_sql(plan)
+        sql_text = built.sql
+        sql_params = built.params
+    except Exception:
+        used_mode = "freeform"
+        ff = freeform.generate(question)
+        sql_text = ff.safe_sql
+        sql_params = {}
+
+    # 3) Execute (with one repair attempt in freeform mode)
+    try:
+        run = sql_agent.run_sql(sql_text, sql_params)
+    except Exception as e:
+        if used_mode == "freeform":
+            ff2 = freeform.repair(question, sql_text or "", str(e))
+            sql_text = ff2.safe_sql
+            sql_params = {}
+            run = sql_agent.run_sql(sql_text, sql_params)
+        else:
+            raise
+
 
     # 4) LLM grounded narrative (no table)
     narrative = synth.synthesize(question, run.sql, run.rows)
@@ -70,6 +101,7 @@ if question:
 
     assistant_msg = narrative
     with st.chat_message("assistant"):
+        st.caption(f"Mode: {used_mode}")
         st.markdown(assistant_msg)
         st.markdown(table_md)
 
@@ -87,4 +119,5 @@ if question:
         # store the toggles used at the time of answering (optional)
         "show_sql": show_sql,
         "show_rows": show_rows,
+        "mode": used_mode,
     })

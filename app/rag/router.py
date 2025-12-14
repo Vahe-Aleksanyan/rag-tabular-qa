@@ -29,6 +29,8 @@ Intent = Literal[
     "REVENUE_BY_COUNTRY",
     "SERVICE_CLIENT_TOTALS",
     "TOP_SERVICES_EU_H2",
+
+    "FREEFORM_SQL"
 ]
 
 
@@ -64,7 +66,7 @@ class QueryPlan(BaseModel):
 
 
 ROUTER_SYSTEM = """You route user questions about a small business database to a structured QueryPlan.
-
+If the question cannot be answered by the listed intents, choose FREEFORM_SQL.
 Allowed intents:
 - LIST_CLIENTS: list clients (often with industry/country)
 - CLIENTS_BY_COUNTRY: clients filtered by a country (e.g. UK)
