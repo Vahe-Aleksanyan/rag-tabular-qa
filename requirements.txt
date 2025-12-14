@@ -1,0 +1,14 @@
+pandas==2.2.3
+openpyxl==3.1.5
+SQLAlchemy==2.0.36
+pymysql==1.1.1
+python-dotenv==1.0.1
+rich==13.9.4
+langchain==0.3.12
+langchain-community==0.3.12
+sqlglot==25.30.0
+streamlit==1.41.1
+pytest==8.3.4
+openai>=1.0.0
+pydantic==2.10.3
+python-dateutil==2.9.0.post0
