@@ -1,1 +1,12 @@
 .question-complexity.md
+.env
+__pycache__/
+.venv/
+venv/
+.DS_Store
+mysql_data/
+artifacts/
+*.pyc
+*.pyo
+*.pyd
+.streamlit/

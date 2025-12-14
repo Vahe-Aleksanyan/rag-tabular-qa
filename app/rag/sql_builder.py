@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, Optional
 
-from sqlalchemy.sql import text
 
 @dataclass(frozen=True)
 class BuiltSQL:
@@ -11,12 +10,27 @@ class BuiltSQL:
     params: Dict[str, Any]
 
 
+def _safe_limit(n: Optional[int], default: int = 50, min_v: int = 1, max_v: int = 200) -> int:
+    if n is None:
+        return default
+    try:
+        v = int(n)
+    except Exception:
+        return default
+    return max(min_v, min(max_v, v))
+
+
 def build_sql(plan) -> BuiltSQL:
     intent = plan.intent
 
+    # ---------- Clients ----------
     if intent == "LIST_CLIENTS":
         return BuiltSQL(
-            sql="SELECT client_id, client_name, industry, country FROM clients ORDER BY client_name",
+            sql="""
+            SELECT client_id, client_name, industry, country
+            FROM clients
+            ORDER BY client_name
+            """,
             params={},
         )
 
@@ -31,6 +45,7 @@ def build_sql(plan) -> BuiltSQL:
             params={"country": plan.country},
         )
 
+    # ---------- Invoices ----------
     if intent == "INVOICES_BY_MONTH":
         return BuiltSQL(
             sql="""
@@ -53,10 +68,16 @@ def build_sql(plan) -> BuiltSQL:
             params={"status": plan.status},
         )
 
+    # all invoices for a given client name (IDs, dates, due, status, currency)
     if intent == "CLIENT_INVOICES":
         return BuiltSQL(
             sql="""
-            SELECT i.invoice_id, i.invoice_date, i.due_date, i.status, i.currency
+            SELECT
+              i.invoice_id,
+              i.invoice_date,
+              i.due_date,
+              i.status,
+              i.currency
             FROM invoices i
             JOIN clients c ON c.client_id = i.client_id
             WHERE c.client_name = :client_name
@@ -65,6 +86,51 @@ def build_sql(plan) -> BuiltSQL:
             params={"client_name": plan.client_name},
         )
 
+    # invoices for client in a given month/year
+    if intent == "INVOICES_BY_CLIENT_AND_MONTH":
+        return BuiltSQL(
+            sql="""
+            SELECT
+              i.invoice_id,
+              i.invoice_date,
+              i.due_date,
+              i.status,
+              i.currency
+            FROM invoices i
+            JOIN clients c ON c.client_id = i.client_id
+            WHERE c.client_name = :client_name
+              AND YEAR(i.invoice_date) = :year
+              AND MONTH(i.invoice_date) = :month
+            ORDER BY i.invoice_date, i.invoice_id
+            """,
+            params={
+                "client_name": plan.client_name,
+                "year": plan.year,
+                "month": plan.month,
+            },
+        )
+
+    # overdue invoices as-of a date (uses status + due_date)
+    if intent == "OVERDUE_INVOICES_AS_OF_DATE":
+        return BuiltSQL(
+            sql="""
+            SELECT
+              i.invoice_id,
+              c.client_name,
+              i.invoice_date,
+              i.due_date,
+              i.status,
+              i.currency
+            FROM invoices i
+            JOIN clients c ON c.client_id = i.client_id
+            WHERE i.status = 'Overdue'
+              AND i.due_date < :as_of_date
+            ORDER BY i.due_date, i.invoice_id
+            """,
+            params={"as_of_date": plan.as_of_date},
+        )
+
+    # ---------- Invoice line items ----------
     if intent == "INVOICE_LINE_ITEMS":
         return BuiltSQL(
             sql="""
@@ -83,6 +149,22 @@ def build_sql(plan) -> BuiltSQL:
             params={"invoice_id": plan.invoice_id},
         )
 
+    # count line items per service_name
+    if intent == "LINE_ITEM_COUNT_BY_SERVICE":
+        return BuiltSQL(
+            sql="""
+            SELECT
+              service_name,
+              COUNT(*) AS line_item_count
+            FROM invoice_line_items
+            GROUP BY service_name
+            ORDER BY line_item_count DESC, service_name
+            """,
+            params={},
+        )
+
+    # ---------- Revenue / totals ----------
+    # total billed per client in a year (incl tax)
     if intent == "CLIENT_TOTAL_BILLED_BY_YEAR":
         return BuiltSQL(
             sql="""
@@ -95,11 +177,12 @@ def build_sql(plan) -> BuiltSQL:
             JOIN invoice_line_items li ON li.invoice_id = i.invoice_id
             WHERE YEAR(i.invoice_date) = :year
             GROUP BY c.client_id, c.client_name
-            ORDER BY total_billed_including_tax DESC
+            ORDER BY total_billed_including_tax DESC, c.client_name
             """,
             params={"year": plan.year},
         )
 
+    # top client by total billed in year (incl tax)
     if intent == "TOP_CLIENT_BY_YEAR":
         return BuiltSQL(
             sql="""
@@ -116,6 +199,94 @@ def build_sql(plan) -> BuiltSQL:
             LIMIT 1
             """,
             params={"year": plan.year},
+        )
+
+    # top N services by revenue in a year (incl tax)
+    if intent == "TOP_SERVICES_BY_REVENUE":
+        limit = _safe_limit(getattr(plan, "limit", None), default=3, max_v=50)
+        return BuiltSQL(
+            sql=f"""
+            SELECT
+              li.service_name,
+              SUM((li.quantity * li.unit_price) * (1 + li.tax_rate)) AS total_revenue_including_tax
+            FROM invoice_line_items li
+            JOIN invoices i ON i.invoice_id = li.invoice_id
+            WHERE YEAR(i.invoice_date) = :year
+            GROUP BY li.service_name
+            ORDER BY total_revenue_including_tax DESC, li.service_name
+            LIMIT {limit}
+            """,
+            params={"year": plan.year},
+        )
+
+    # revenue grouped by client country for a year (incl tax)
+    if intent == "REVENUE_BY_COUNTRY":
+        return BuiltSQL(
+            sql="""
+            SELECT
+              c.country,
+              SUM((li.quantity * li.unit_price) * (1 + li.tax_rate)) AS total_billed_including_tax
+            FROM clients c
+            JOIN invoices i ON i.client_id = c.client_id
+            JOIN invoice_line_items li ON li.invoice_id = i.invoice_id
+            WHERE YEAR(i.invoice_date) = :year
+            GROUP BY c.country
+            ORDER BY total_billed_including_tax DESC, c.country
+            """,
+            params={"year": plan.year},
+        )
+
+    # for a service, list clients and how much they paid (incl tax)
+    if intent == "SERVICE_CLIENT_TOTALS":
+        return BuiltSQL(
+            sql="""
+            SELECT
+              c.client_id,
+              c.client_name,
+              SUM((li.quantity * li.unit_price) * (1 + li.tax_rate)) AS total_paid_including_tax
+            FROM invoice_line_items li
+            JOIN invoices i ON i.invoice_id = li.invoice_id
+            JOIN clients c ON c.client_id = i.client_id
+            WHERE li.service_name = :service_name
+              AND YEAR(i.invoice_date) = :year
+            GROUP BY c.client_id, c.client_name
+            ORDER BY total_paid_including_tax DESC, c.client_name
+            """,
+            params={"service_name": plan.service_name, "year": plan.year},
+        )
+
+    # European clients only, top 3 services by revenue in H2 2024
+    # NOTE: "European" is ambiguous; we'll define it by a fixed allowlist of EU/Europe countries in router/README,
+    # or store an 'is_europe' mapping later. For now we expect plan.countries to be provided by router.
+    if intent == "TOP_SERVICES_EU_H2":
+        limit = _safe_limit(getattr(plan, "limit", None), default=3, max_v=50)
+        # Expect: plan.start_date, plan.end_date, plan.countries (list[str])
+        # MySQL doesn't support binding a list directly in IN() with SQLAlchemy text easily; we build placeholders.
+        countries = list(getattr(plan, "countries", []) or [])
+        if not countries:
+            # fallback: if router didn't provide, use a conservative set
+            countries = ["UK", "France", "Germany", "Netherlands", "Spain", "Italy"]
+
+        placeholders = ", ".join([f":c{i}" for i in range(len(countries))])
+        params = {f"c{i}": countries[i] for i in range(len(countries))}
+        params.update({"start_date": plan.start_date, "end_date": plan.end_date})
+
+        return BuiltSQL(
+            sql=f"""
+            SELECT
+              li.service_name,
+              SUM((li.quantity * li.unit_price) * (1 + li.tax_rate)) AS total_revenue_including_tax
+            FROM invoice_line_items li
+            JOIN invoices i ON i.invoice_id = li.invoice_id
+            JOIN clients c ON c.client_id = i.client_id
+            WHERE i.invoice_date >= :start_date
+              AND i.invoice_date <= :end_date
+              AND c.country IN ({placeholders})
+            GROUP BY li.service_name
+            ORDER BY total_revenue_including_tax DESC, li.service_name
+            LIMIT {limit}
+            """,
+            params=params,
         )
 
     raise ValueError(f"Unsupported intent: {intent}")
