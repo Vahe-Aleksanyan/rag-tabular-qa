@@ -84,6 +84,8 @@ Allowed intents:
 - SERVICE_CLIENT_TOTALS: for a service_name and year, list clients and totals paid (including tax)
 - TOP_SERVICES_EU_H2: European clients only, top services by revenue in H2 2024 (2024-07-01 to 2024-12-31)
 
+Use FREEFORM_SQL only if none of the other intents fit reasonably.
+
 Extraction rules:
 - Always choose exactly one intent.
 - Extract entities exactly as written in the user's question. Do not invent IDs or names.

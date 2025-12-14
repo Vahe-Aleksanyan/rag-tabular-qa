@@ -34,6 +34,8 @@ freeform = FreeformSQLGenerator(llm)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "plan_cache" not in st.session_state:
+    st.session_state.plan_cache = {}
 
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
@@ -60,13 +62,35 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    # 1) Plan
-    plan = router.plan(question)
+        # 1) Plan (cache by normalized question to avoid routing instability)
+    key = " ".join(question.strip().lower().split())
+    if key in st.session_state.plan_cache:
+        plan = st.session_state.plan_cache[key]
+    else:
+        plan = router.plan(question)
+        st.session_state.plan_cache[key] = plan
 
-     # 2) Deterministic SQL first, then fallback to freeform SQL
-    used_mode = "deterministic"
-    sql_text = None
-    sql_params = {}
+    # 2) Router stability guard:
+    # - If router chose a deterministic intent, ALWAYS use deterministic SQL.
+    # - Only use freeform if router explicitly returns FREEFORM_SQL OR deterministic builder doesn't support the intent.
+    if plan.intent == "FREEFORM_SQL":
+        used_mode = "freeform"
+        ff = freeform.generate(question)
+        sql_text = ff.safe_sql
+        sql_params = {}
+    else:
+        used_mode = "deterministic"
+        try:
+            built = build_sql(plan)
+            sql_text = built.sql
+            sql_params = built.params
+        except ValueError:
+            # Unsupported deterministic intent => fallback
+            used_mode = "freeform"
+            ff = freeform.generate(question)
+            sql_text = ff.safe_sql
+            sql_params = {}
+
 
     try:
         if plan.intent == "FREEFORM_SQL":
