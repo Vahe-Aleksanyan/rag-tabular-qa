@@ -20,12 +20,13 @@ class DBConfig:
 
 def get_db_config() -> DBConfig:
     return DBConfig(
-        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
-        port=int(os.getenv("MYSQL_PORT", "3307")),
+        host=os.getenv("MYSQL_HOST", "db"),
+        port=int(os.getenv("MYSQL_PORT", "3306")),
         database=os.getenv("MYSQL_DATABASE", "ragdb"),
         user=os.getenv("MYSQL_USER", "raguser"),
         password=os.getenv("MYSQL_PASSWORD", "ragpass"),
     )
+
 
 
 def get_engine() -> Engine:

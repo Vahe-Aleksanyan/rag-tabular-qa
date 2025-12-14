@@ -1,0 +1,117 @@
+tests:
+  - id: list_clients
+    question: "List all clients with their industries."
+    expect:
+      action: "QUERY"
+      intent: "LIST_CLIENTS"
+    oracle:
+      sql: |
+        SELECT client_id, client_name, industry, country
+        FROM clients
+        ORDER BY client_name
+      params: {}
+    assertions:
+      min_rows: 1
+      columns: ["client_id", "client_name", "industry", "country"]
+
+  - id: clients_uk
+    question: "Which clients are based in the UK?"
+    expect:
+      action: "QUERY"
+      intent: "CLIENTS_BY_COUNTRY"
+      fields:
+        country: "UK"
+    oracle:
+      sql: |
+        SELECT client_id, client_name, industry, country
+        FROM clients
+        WHERE country = :country
+        ORDER BY client_name
+      params:
+        country: "UK"
+    assertions:
+      columns: ["client_id", "client_name", "industry", "country"]
+
+  - id: invoices_march_2024
+    question: "List all invoices issued in March 2024 with their statuses."
+    expect:
+      action: "QUERY"
+      intent: "INVOICES_BY_MONTH"
+      fields:
+        year: 2024
+        month: 3
+    oracle:
+      sql: |
+        SELECT invoice_id, client_id, invoice_date, due_date, status, currency
+        FROM invoices
+        WHERE YEAR(invoice_date)=:year AND MONTH(invoice_date)=:month
+        ORDER BY invoice_date, invoice_id
+      params:
+        year: 2024
+        month: 3
+    assertions:
+      columns: ["invoice_id", "client_id", "invoice_date", "due_date", "status", "currency"]
+
+  - id: overdue_invoices
+    question: "Which invoices are currently marked as \"Overdue\"?"
+    expect:
+      action: "QUERY"
+      intent: "INVOICES_BY_STATUS"
+      fields:
+        status: "Overdue"
+    oracle:
+      sql: |
+        SELECT invoice_id, client_id, invoice_date, due_date, status, currency
+        FROM invoices
+        WHERE status = :status
+        ORDER BY due_date, invoice_id
+      params:
+        status: "Overdue"
+
+  - id: line_item_count_by_service
+    question: "For each service_name in InvoiceLineItems, how many line items are there?"
+    expect:
+      action: "QUERY"
+      intent: "LINE_ITEM_COUNT_BY_SERVICE"
+    oracle:
+      sql: |
+        SELECT service_name, COUNT(*) AS line_item_count
+        FROM invoice_line_items
+        GROUP BY service_name
+        ORDER BY line_item_count DESC, service_name
+      params: {}
+    assertions:
+      columns: ["service_name", "line_item_count"]
+
+  - id: invoice_i1001_line_items
+    question: "For invoice I1001, list all line items with service name, quantity, unit price, tax rate, and compute the line total (including tax) for each."
+    expect:
+      action: "QUERY"
+      intent: "INVOICE_LINE_ITEMS"
+      fields:
+        invoice_id: "I1001"
+    oracle:
+      sql: |
+        SELECT
+          line_id,
+          invoice_id,
+          service_name,
+          quantity,
+          unit_price,
+          tax_rate,
+          (quantity * unit_price) * (1 + tax_rate) AS line_total_including_tax
+        FROM invoice_line_items
+        WHERE invoice_id = :invoice_id
+        ORDER BY line_id
+      params:
+        invoice_id: "I1001"
+
+  - id: clarify_missing_year
+    question: "Show invoices from March."
+    expect:
+      action: "CLARIFY"
+
+  - id: refuse_out_of_domain
+    question: "Who is the president of France?"
+    expect:
+      action: "REFUSE"
