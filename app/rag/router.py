@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from app.llm.openai_client import OpenAIClient
+from app.utils.prompt_loader import load_prompt
+
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------
@@ -40,6 +44,8 @@ Intent = Literal[
 
 
 class QueryPlan(BaseModel):
+    """Structured plan for executing an intent against the SQL backend."""
+
     model_config = {"frozen": False}
 
     intent: Intent
@@ -79,6 +85,8 @@ Action = Literal["QUERY", "CLARIFY", "REFUSE"]
 
 
 class RouterResult(BaseModel):
+    """LLM-derived routing decision for a user question."""
+
     action: Action
     plan: Optional[QueryPlan] = None
 
@@ -96,82 +104,7 @@ class RouterResult(BaseModel):
 # -----------------------------
 # Prompt
 # -----------------------------
-ROUTER_SYSTEM = """You route user questions about a small business database (clients, invoices, invoice_line_items).
-
-You must output a JSON object that strictly matches the provided schema (RouterResult).
-Do not include any text outside the JSON.
-
-You have THREE possible actions:
-1) action="QUERY": return a plan for retrieval.
-2) action="CLARIFY": if the question is ambiguous or missing required entities, ask ONE short clarification question and list missing_fields.
-3) action="REFUSE": if the question is NOT about the business tables (clients, invoices, invoice line items), politely refuse and suggest in-domain examples.
-
-Allowed intents (for action="QUERY"):
-- LIST_CLIENTS
-- CLIENTS_BY_COUNTRY
-- INVOICES_BY_MONTH
-- INVOICES_BY_STATUS
-- CLIENT_INVOICES
-- INVOICES_BY_CLIENT_AND_MONTH
-- OVERDUE_INVOICES_AS_OF_DATE
-- INVOICE_LINE_ITEMS
-- LINE_ITEM_COUNT_BY_SERVICE
-- CLIENT_TOTAL_BILLED_BY_YEAR
-- TOP_CLIENT_BY_YEAR
-- TOP_SERVICES_BY_REVENUE
-- REVENUE_BY_COUNTRY
-- SERVICE_CLIENT_TOTALS
-- TOP_SERVICES_EU_H2
-- FREEFORM_SQL (last resort only)
-
-General rules:
-- Choose exactly ONE action.
-- Use FREEFORM_SQL only if none of the listed intents fit reasonably.
-- Never invent IDs, names, dates, or values not explicitly present.
-- If a field is not mentioned, leave it null.
-- rationale must be ONE short sentence explaining the decision.
-
-Date extraction rules:
-- "March 2024" → month=3, year=2024
-- "as of 2024-12-31" → as_of_date="2024-12-31"
-- "H2 2024" → start_date="2024-07-01", end_date="2024-12-31", year=2024
-- "top 3" → limit=3 (otherwise leave null)
-
-IMPORTANT DISAMBIGUATION (Overdue invoices):
-- If the question asks for invoices with status "Overdue" (e.g. "marked as overdue", "currently overdue"), use INVOICES_BY_STATUS with status="Overdue".
-- Use OVERDUE_INVOICES_AS_OF_DATE ONLY when an explicit cutoff date is mentioned (e.g. "as of 2024-12-31").
-- The word "currently" alone does NOT imply an as-of date.
-
-For CLARIFY:
-- action="CLARIFY"
-- plan must be null
-- clarifying_question must be ONE short question
-- missing_fields must list required fields (e.g., ["year"], ["invoice_id"])
-- Do NOT guess or infer missing values
-
-For QUERY:
-- action="QUERY"
-- plan must be non-null
-- clarifying_question must be null
-- missing_fields must be []
-- rationale must be present
-
-For REFUSE:
-- action="REFUSE"
-- plan must be null
-- clarifying_question must be null
-- missing_fields must be []
-- refusal_message must politely explain the scope AND give 2–3 valid example questions
-
-Examples:
-
-User: "Which invoices are currently marked as Overdue?"
-→ action="QUERY", intent="INVOICES_BY_STATUS", status="Overdue"
-
-User: "Which invoices are overdue as of 2024-12-31?"
-→ action="QUERY", intent="OVERDUE_INVOICES_AS_OF_DATE", as_of_date="2024-12-31"
-
-"""
+ROUTER_SYSTEM = load_prompt("router_system.txt")
 
 
 # -----------------------------
@@ -233,13 +166,23 @@ ROUTER_RESULT_SCHEMA: Dict[str, Any] = {
 # Router
 # -----------------------------
 class Router:
+    """Routes user questions to query plans or clarification/refusal actions using the LLM."""
+
     def __init__(self, llm: OpenAIClient):
         self.llm = llm
 
     def route(self, question: str) -> RouterResult:
+        """Run the routing prompt and validate the JSON response."""
+        logger.debug("Routing question: %s", question)
         obj = self.llm.json_schema(
             system=ROUTER_SYSTEM,
             user=question,
             schema=ROUTER_RESULT_SCHEMA,
         )
-        return RouterResult.model_validate(obj)
+        result = RouterResult.model_validate(obj)
+        logger.info(
+            "Router decision: action=%s intent=%s",
+            result.action,
+            getattr(result.plan, "intent", None),
+        )
+        return result

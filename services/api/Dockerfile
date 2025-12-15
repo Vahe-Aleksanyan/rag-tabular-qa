@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Include the seed Excel data so ingestion works inside the container
 COPY data /app/data
+COPY prompts /app/prompts
 COPY app /app/app
 COPY services/api /app/services/api
 

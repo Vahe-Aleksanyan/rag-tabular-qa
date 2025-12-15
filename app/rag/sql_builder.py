@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-
+logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class BuiltSQL:
     sql: str
     params: Dict[str, Any]
+    """Structured SQL text with bound parameters."""
 
 
 def _safe_limit(n: Optional[int], default: int = 50, min_v: int = 1, max_v: int = 200) -> int:
+    """Clamp a numeric limit to a safe range with a default fallback."""
     if n is None:
         return default
     try:
@@ -21,7 +24,9 @@ def _safe_limit(n: Optional[int], default: int = 50, min_v: int = 1, max_v: int 
 
 
 def build_sql(plan) -> BuiltSQL:
+    """Build a parameterized SQL string for the given query plan."""
     intent = plan.intent
+    logger.debug("Building SQL for intent=%s", intent)
 
     # ---------- Clients ----------
     if intent == "LIST_CLIENTS":
@@ -204,6 +209,7 @@ def build_sql(plan) -> BuiltSQL:
     # top N services by revenue in a year (incl tax)
     if intent == "TOP_SERVICES_BY_REVENUE":
         limit = _safe_limit(getattr(plan, "limit", None), default=3, max_v=50)
+        logger.debug("Using limit=%s for TOP_SERVICES_BY_REVENUE", limit)
         return BuiltSQL(
             sql=f"""
             SELECT
@@ -260,12 +266,14 @@ def build_sql(plan) -> BuiltSQL:
     # or store an 'is_europe' mapping later. For now we expect plan.countries to be provided by router.
     if intent == "TOP_SERVICES_EU_H2":
         limit = _safe_limit(getattr(plan, "limit", None), default=3, max_v=50)
+        logger.debug("Using limit=%s for TOP_SERVICES_EU_H2", limit)
         # Expect: plan.start_date, plan.end_date, plan.countries (list[str])
         # MySQL doesn't support binding a list directly in IN() with SQLAlchemy text easily; we build placeholders.
         countries = list(getattr(plan, "countries", []) or [])
         if not countries:
             # fallback: if router didn't provide, use a conservative set
             countries = ["UK", "France", "Germany", "Netherlands", "Spain", "Italy"]
+        logger.debug("Countries used for TOP_SERVICES_EU_H2: %s", countries)
 
         placeholders = ", ".join([f":c{i}" for i in range(len(countries))])
         params = {f"c{i}": countries[i] for i in range(len(countries))}
@@ -289,4 +297,5 @@ def build_sql(plan) -> BuiltSQL:
             params=params,
         )
 
+    logger.error("Unsupported intent encountered: %s", intent)
     raise ValueError(f"Unsupported intent: {intent}")

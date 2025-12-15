@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from typing import Any, Dict, Optional
 
 import requests
@@ -8,6 +9,9 @@ import streamlit as st
 
 from app.utils.formatting import rows_to_markdown_table
 
+from app.utils.logging import setup_logging
+setup_logging()
+logger = logging.getLogger(__name__)
 
 # -----------------------------
 # Helpers
@@ -67,11 +71,13 @@ API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
 
 st.sidebar.header("Backend")
 st.sidebar.code(API_URL)
+logger.info("Streamlit UI initialized with API_URL=%s", API_URL)
 
 show_sql = st.sidebar.checkbox("Show SQL", value=True)
 show_rows = st.sidebar.checkbox("Show retrieved rows (JSON)", value=False)
 
 if st.sidebar.button("Clear chat"):
+    logger.info("Clearing chat history")
     st.session_state.messages = []
     st.rerun()
 
@@ -79,8 +85,10 @@ if st.sidebar.button("Clear chat"):
 with st.sidebar.expander("API status", expanded=False):
     try:
         h = requests.get(f"{API_URL}/health", timeout=5)
+        logger.debug("Health check response: %s", h.text)
         st.write(h.json())
     except Exception as e:
+        logger.error("API health check failed: %s", e, exc_info=True)
         st.error(f"API unreachable: {e}")
 
 
@@ -104,17 +112,21 @@ for m in st.session_state.messages:
 question = st.chat_input("Ask about clients, invoices, line items...")
 
 if not question:
+    logger.debug("No question entered; stopping render")
     st.stop()
 
 # Store + render user message
 st.session_state.messages.append({"role": "user", "content": question})
+logger.info("User question submitted")
 with st.chat_message("user"):
     st.markdown(question)
 
 # Call backend
 try:
     data = api_post_chat(API_URL, question)
+    logger.info("Backend responded: action=%s", data.get("action"))
 except Exception as e:
+    logger.error("Backend request failed: %s", e, exc_info=True)
     msg = f"Backend error: {e}"
     with st.chat_message("assistant"):
         st.error(msg)
@@ -127,6 +139,7 @@ if action == "REFUSE":
     msg = data.get("refusal_message") or (
         "I can only answer questions about the business tables: clients, invoices, and invoice line items."
     )
+    logger.warning("Request refused: %s", msg)
     with st.chat_message("assistant"):
         st.warning(msg)
     append_assistant(msg, mode="refuse")
@@ -134,6 +147,7 @@ if action == "REFUSE":
 
 if action == "CLARIFY":
     msg = data.get("clarifying_question") or "I need one detail to answer. Can you clarify?"
+    logger.info("Clarification requested: %s", msg)
     with st.chat_message("assistant"):
         st.info(msg)
     append_assistant(msg, mode="clarify")
@@ -147,6 +161,7 @@ sql = data.get("sql") or ""
 params = data.get("params") or {}
 
 table_md = rows_to_markdown_table(rows) if rows else ""
+logger.info("Query response rendered: mode=%s rows=%s", mode, len(rows) if rows else 0)
 
 sql_block = ""
 if sql:

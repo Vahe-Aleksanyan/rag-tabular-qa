@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY app /app/app
 COPY services/ui /app/services/ui
+COPY prompts /app/prompts
 
 ENV PYTHONPATH=/app
 ENV API_URL=http://api:8000
